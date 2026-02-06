@@ -65,7 +65,7 @@ def _load_inputs(in_dir: str, interval_minutes: int) -> tuple[pd.DataFrame, pd.D
     staffing = pd.read_parquet(os.path.join(path, "fact_staffing.parquet"))
 
     for df in (contacts, staffing):
-        df["interval_start"] = pd.to_datetime(df["interval_start"], utc=False)
+        df["timestamp_start"] = pd.to_datetime(df["timestamp_start"], utc=False)
 
     return contacts, staffing
 
@@ -79,8 +79,8 @@ def _time_bucket(ts: pd.Series, interval_minutes: int) -> pd.Series:
 def _fit_profile_and_trend(series_df: pd.DataFrame, interval_minutes: int) -> dict:
     """Fit seasonal profile and daily trend for one channel/queue series."""
     df = series_df.copy()
-    df["dow"] = df["interval_start"].dt.dayofweek
-    df["bucket"] = _time_bucket(df["interval_start"], interval_minutes)
+    df["dow"] = df["timestamp_start"].dt.dayofweek
+    df["bucket"] = _time_bucket(df["timestamp_start"], interval_minutes)
 
     # Use robust median profile to reduce sensitivity to synthetic spikes.
     profile = (
@@ -91,7 +91,7 @@ def _fit_profile_and_trend(series_df: pd.DataFrame, interval_minutes: int) -> di
     )
 
     # Daily totals for trend.
-    daily = df.resample("D", on="interval_start")["offered_contacts"].sum().reset_index()
+    daily = df.resample("D", on="timestamp_start")["offered_contacts"].sum().reset_index()
     daily["t"] = np.arange(len(daily), dtype=float)
 
     # Simple linear trend fit (clipped to avoid negative).
@@ -124,13 +124,13 @@ def _forecast_series(model: dict, future_index: pd.DatetimeIndex, interval_minut
     prof["key"] = prof["dow"].astype(str) + "_" + prof["bucket"].astype(str)
     prof_map = dict(zip(prof["key"], prof["profile"].astype(float)))
 
-    future_df = pd.DataFrame({"interval_start": future_index})
-    future_df["dow"] = future_df["interval_start"].dt.dayofweek
-    future_df["bucket"] = _time_bucket(future_df["interval_start"], interval_minutes)
+    future_df = pd.DataFrame({"timestamp_start": future_index})
+    future_df["dow"] = future_df["timestamp_start"].dt.dayofweek
+    future_df["bucket"] = _time_bucket(future_df["timestamp_start"], interval_minutes)
     future_df["key"] = future_df["dow"].astype(str) + "_" + future_df["bucket"].astype(str)
 
     # Trend scales daily totals; convert to per-interval scaling.
-    future_df["day"] = future_df["interval_start"].dt.floor("D")
+    future_df["day"] = future_df["timestamp_start"].dt.floor("D")
     day_ord = (future_df["day"].rank(method="dense").astype(int) - 1).astype(float)
     daily_total = model["trend_intercept"] + model["trend_slope"] * day_ord
     daily_total = np.maximum(0.0, daily_total)
@@ -209,14 +209,13 @@ def _simulate_scenario(
                 interval_seconds=interval_seconds,
                 sla_threshold_seconds=thr,
                 sla_target=0.80,
-                shrinkage=shrinkage,
-                occupancy_cap=0.85,
+                shrinkage_rate=shrinkage,
             )
             er = erlang_c_summary(
                 contacts=offered,
-                aht_seconds=aht,
                 interval_seconds=interval_seconds,
-                agents_available=int(req.available_agents),
+                aht_seconds=aht,
+                agents=req.available_agents,
                 sla_threshold_seconds=thr,
             )
             req_agents.append(req.scheduled_agents)
@@ -227,8 +226,7 @@ def _simulate_scenario(
                 contacts=offered,
                 aht_seconds=aht,
                 interval_seconds=interval_seconds,
-                shrinkage=shrinkage,
-                buffer=scenario.staffing_buffer,
+                shrinkage_rate=shrinkage,
             )
             # Throughput SLA proxy: capacity / demand
             capacity_contacts = (req.available_agents * interval_seconds) / aht
@@ -260,9 +258,9 @@ def _simulate_scenario(
         if is_rt:
             er = erlang_c_summary(
                 contacts=offered,
-                aht_seconds=aht,
                 interval_seconds=interval_seconds,
-                agents_available=int(avail),
+                aht_seconds=aht,
+                agents=int(avail),
                 sla_threshold_seconds=thr,
             )
             new_sla.append(er.service_level)
@@ -292,36 +290,43 @@ def main() -> None:
 
     contacts, staffing = _load_inputs(args.in_dir, args.interval_minutes)
 
-    # Identify per series metadata from staffing facts (costs, shrinkage, AHT, SLA thresholds)
-    meta = (
+    # Identify per series metadata from staffing + contacts facts
+    staff_meta = (
         staffing.groupby(["channel", "queue"])
         .agg(
             cost_per_hour=("cost_per_hour", "mean"),
             shrinkage_rate=("shrinkage_rate", "mean"),
-            aht_seconds=("aht_seconds", "mean"),
-            sla_threshold_seconds=("sla_threshold_seconds", "max"),
-            is_realtime=("is_realtime", "max"),
         )
         .reset_index()
     )
+    contact_meta = (
+        contacts.groupby(["channel", "queue"])
+        .agg(
+            aht_seconds=("aht_seconds", "mean"),
+            sla_threshold_seconds=("sla_threshold_seconds", "max"),
+        )
+        .reset_index()
+    )
+    meta = staff_meta.merge(contact_meta, on=["channel", "queue"], how="left")
+    meta["is_realtime"] = meta["channel"].isin(["voice", "chat"])
 
     # Build forecasts for each channel/queue
     forecasts = []
     quality_rows = []
 
     for (channel, queue), df_series in contacts.groupby(["channel", "queue"], sort=False):
-        df_series = df_series.sort_values("interval_start")
+        df_series = df_series.sort_values("timestamp_start")
 
         # Holdout split
-        cutoff = df_series["interval_start"].max() - pd.Timedelta(days=args.holdout_days)
-        train = df_series[df_series["interval_start"] <= cutoff]
-        test = df_series[df_series["interval_start"] > cutoff]
+        cutoff = df_series["timestamp_start"].max() - pd.Timedelta(days=args.holdout_days)
+        train = df_series[df_series["timestamp_start"] <= cutoff]
+        test = df_series[df_series["timestamp_start"] > cutoff]
 
         model = _fit_profile_and_trend(train, args.interval_minutes)
 
         # Evaluate on holdout
         if len(test) > 0:
-            pred_test = _forecast_series(model, pd.DatetimeIndex(test["interval_start"]), args.interval_minutes)
+            pred_test = _forecast_series(model, pd.DatetimeIndex(test["timestamp_start"]), args.interval_minutes)
             q = _evaluate_forecast(test["offered_contacts"], pred_test)
             quality_rows.append(
                 {
@@ -334,7 +339,7 @@ def main() -> None:
             )
 
         # Forecast future
-        last_ts = df_series["interval_start"].max()
+        last_ts = df_series["timestamp_start"].max()
         freq = f"{args.interval_minutes}min"
         future_index = pd.date_range(
             start=last_ts + pd.Timedelta(minutes=args.interval_minutes),
@@ -345,7 +350,7 @@ def main() -> None:
 
         f = pd.DataFrame(
             {
-                "interval_start": future_index,
+                "timestamp_start": future_index,
                 "channel": channel,
                 "queue": queue,
                 "forecast_offered": pred_future.values,
@@ -371,7 +376,7 @@ def main() -> None:
     scenario_df.to_parquet(scenario_path, index=False)
 
     # KPI summary
-    scenario_df["date"] = scenario_df["interval_start"].dt.date
+    scenario_df["date"] = scenario_df["timestamp_start"].dt.date
     kpi = (
         scenario_df.groupby(["scenario_id", "scenario_name", "date", "channel"], sort=False)
         .agg(
