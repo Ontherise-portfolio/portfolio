@@ -16,7 +16,7 @@ TRUNCATE TABLE wfm.fact_staffing;
 -- Dimensions
 \copy wfm.dim_channel(channel_name,is_real_time) FROM :'data_dir'/dim_channel.csv WITH (FORMAT csv, HEADER true)
 \copy wfm.dim_queue(channel_name,queue_name) FROM :'data_dir'/dim_queue.csv WITH (FORMAT csv, HEADER true)
-\copy wfm.dim_time(ts_start,date,year,quarter,month,week_of_year,day_of_week,hour,minute) FROM :'data_dir'/dim_time.csv WITH (FORMAT csv, HEADER true)
+\copy wfm.dim_time(ts_start,date_key,year,month,day,dow,hour,minute) FROM :'data_dir'/dim_time.csv WITH (FORMAT csv, HEADER true)
 
 -- Facts
 \copy wfm.fact_contacts(ts_start,interval_minutes,channel_name,queue_name,offered_contacts,handled_contacts,abandoned_contacts,aht_seconds,asa_seconds,service_level,sla_threshold_seconds) FROM :'data_dir'/fact_contacts.csv WITH (FORMAT csv, HEADER true)

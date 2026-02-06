@@ -211,15 +211,68 @@ def _aggregate_interval(
 def _write_postgres_load_csvs(demand: pd.DataFrame, staffing: pd.DataFrame, out_dir: str) -> None:
     os.makedirs(out_dir, exist_ok=True)
 
+    # --- Dimension CSVs ---
+
+    # dim_channel: channel_name, is_real_time
+    channels = sorted(demand["channel"].unique())
+    realtime_channels = {"voice", "chat"}
+    dim_channel = pd.DataFrame({
+        "channel_name": channels,
+        "is_real_time": [ch in realtime_channels for ch in channels],
+    })
+    dim_channel.to_csv(os.path.join(out_dir, "dim_channel.csv"), index=False)
+
+    # dim_queue: channel_name, queue_name
+    dim_queue = (
+        demand[["channel", "queue"]]
+        .drop_duplicates()
+        .sort_values(["channel", "queue"])
+        .rename(columns={"channel": "channel_name", "queue": "queue_name"})
+    )
+    dim_queue.to_csv(os.path.join(out_dir, "dim_queue.csv"), index=False)
+
+    # dim_time: ts_start, date_key, year, month, day, dow, hour, minute
+    tmin = demand["timestamp_start"].min()
+    tmax = demand["timestamp_start"].max()
+    rng = pd.date_range(tmin, tmax, freq="15min")
+    dim_time = pd.DataFrame({"ts_start": rng.strftime("%Y-%m-%dT%H:%M:%SZ")})
+    dim_time["date_key"] = rng.date
+    dim_time["year"] = rng.year
+    dim_time["month"] = rng.month
+    dim_time["day"] = rng.day
+    dim_time["dow"] = rng.dayofweek
+    dim_time["hour"] = rng.hour
+    dim_time["minute"] = rng.minute
+    dim_time.to_csv(os.path.join(out_dir, "dim_time.csv"), index=False)
+
+    # --- Fact CSVs (column names and order match \copy in 02_load_from_csv.sql) ---
+
     demand_out = demand.copy()
-    staffing_out = staffing.copy()
-
-    # Postgres COPY likes ISO8601 timestamps
     demand_out["timestamp_start"] = demand_out["timestamp_start"].dt.strftime("%Y-%m-%dT%H:%M:%SZ")
-    staffing_out["timestamp_start"] = staffing_out["timestamp_start"].dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+    demand_out = demand_out.rename(columns={
+        "timestamp_start": "ts_start",
+        "channel": "channel_name",
+        "queue": "queue_name",
+    })
+    fact_contacts_cols = [
+        "ts_start", "interval_minutes", "channel_name", "queue_name",
+        "offered_contacts", "handled_contacts", "abandoned_contacts",
+        "aht_seconds", "asa_seconds", "service_level", "sla_threshold_seconds",
+    ]
+    demand_out[fact_contacts_cols].to_csv(os.path.join(out_dir, "fact_contacts.csv"), index=False)
 
-    demand_out.to_csv(os.path.join(out_dir, "fact_contacts.csv"), index=False)
-    staffing_out.to_csv(os.path.join(out_dir, "fact_staffing.csv"), index=False)
+    staffing_out = staffing.copy()
+    staffing_out["timestamp_start"] = staffing_out["timestamp_start"].dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+    staffing_out = staffing_out.rename(columns={
+        "timestamp_start": "ts_start",
+        "channel": "channel_name",
+        "queue": "queue_name",
+    })
+    fact_staffing_cols = [
+        "ts_start", "interval_minutes", "channel_name", "queue_name",
+        "agents_scheduled", "agents_available", "shrinkage_rate", "cost_per_hour",
+    ]
+    staffing_out[fact_staffing_cols].to_csv(os.path.join(out_dir, "fact_staffing.csv"), index=False)
 
 
 def main() -> None:
