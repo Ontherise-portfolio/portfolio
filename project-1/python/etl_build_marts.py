@@ -189,8 +189,7 @@ def _aggregate_interval(
         threshold = float(row.sla_threshold_seconds) if pd.notnull(row.sla_threshold_seconds) else 0.0
 
         if row.channel in ("voice", "chat") and handled > 0 and agents > 0 and aht > 0:
-            traffic = (handled * aht) / interval_seconds
-            res = erlang_c_summary(traffic, agents, aht, threshold)
+            res = erlang_c_summary(handled, interval_seconds, aht, agents, threshold)
             asa_list.append(res.asa_seconds)
             sl_list.append(res.service_level)
         elif row.channel == "email" and handled > 0 and agents > 0 and aht > 0:

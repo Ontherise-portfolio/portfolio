@@ -21,6 +21,12 @@ class ErlangResult:
     service_level: float
 
 
+@dataclass(frozen=True)
+class StaffingResult:
+    available_agents: int
+    scheduled_agents: int
+
+
 def _factorial(n: int) -> float:
     # math.factorial returns int; we want float to avoid overflow patterns.
     return float(math.factorial(n))
@@ -145,10 +151,9 @@ def erlang_c_summary(
     aht_seconds: float,
     agents: int,
     sla_threshold_seconds: float,
-) -> tuple[float, float, float, float]:
-    """Return (traffic_erlangs, prob_wait, asa_seconds, service_level)."""
-    r = erlang_metrics(contacts, interval_seconds, aht_seconds, agents, sla_threshold_seconds)
-    return (r.traffic_erlangs, r.prob_wait, r.asa_seconds, r.service_level)
+) -> ErlangResult:
+    """Return ErlangResult with traffic_erlangs, prob_wait, asa_seconds, service_level."""
+    return erlang_metrics(contacts, interval_seconds, aht_seconds, agents, sla_threshold_seconds)
 
 
 def required_agents_realtime(
@@ -158,8 +163,8 @@ def required_agents_realtime(
     sla_threshold_seconds: float,
     sla_target: float,
     shrinkage_rate: float = 0.0,
-) -> tuple[int, int]:
-    """Return (required_available, required_scheduled) for a real-time channel."""
+) -> StaffingResult:
+    """Return StaffingResult with available_agents and scheduled_agents for a real-time channel."""
     required_available = required_agents_for_sla(
         contacts=contacts,
         interval_seconds=interval_seconds,
@@ -170,7 +175,7 @@ def required_agents_realtime(
     # Convert available requirement to scheduled requirement.
     r = max(0.0, min(0.95, shrinkage_rate))
     required_scheduled = int(math.ceil(required_available / max(1e-9, (1.0 - r))))
-    return required_available, required_scheduled
+    return StaffingResult(available_agents=required_available, scheduled_agents=required_scheduled)
 
 
 def required_agents_throughput(
@@ -179,10 +184,10 @@ def required_agents_throughput(
     aht_seconds: float,
     shrinkage_rate: float = 0.0,
     productivity: float = 1.0,
-) -> tuple[int, int]:
-    """Return (required_available, required_scheduled) for a throughput channel."""
+) -> StaffingResult:
+    """Return StaffingResult with available_agents and scheduled_agents for a throughput channel."""
     prod = max(0.1, productivity)
     required_available = int(math.ceil((contacts * aht_seconds) / max(1, interval_seconds) / prod))
     r = max(0.0, min(0.95, shrinkage_rate))
     required_scheduled = int(math.ceil(required_available / max(1e-9, (1.0 - r))))
-    return required_available, required_scheduled
+    return StaffingResult(available_agents=required_available, scheduled_agents=required_scheduled)

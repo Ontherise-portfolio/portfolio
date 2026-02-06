@@ -172,24 +172,25 @@ def main() -> None:
                 # Staffing plan: compute "needed" then add small planning errors.
                 if cfg.name in ("voice", "chat"):
                     shrinkage = float(np.clip(rng.normal(0.28, 0.03), 0.15, 0.45))
-                    needed = required_agents_realtime(
+                    staffing_req = required_agents_realtime(
                         contacts=handled,
                         aht_seconds=float(aht),
                         interval_seconds=interval_seconds,
                         sla_threshold_seconds=cfg.sla_threshold_seconds,
-                        target_service_level=0.8 if cfg.name == "voice" else 0.75,
-                        max_agents=250,
+                        sla_target=0.8 if cfg.name == "voice" else 0.75,
                         shrinkage_rate=shrinkage,
                     )
+                    needed = staffing_req.scheduled_agents
                 else:
                     shrinkage = float(np.clip(rng.normal(0.25, 0.03), 0.10, 0.40))
-                    needed = required_agents_throughput(
+                    staffing_req = required_agents_throughput(
                         contacts=handled,
                         aht_seconds=float(aht),
                         interval_seconds=interval_seconds,
                         shrinkage_rate=shrinkage,
-                        target_occupancy=0.82,
+                        productivity=0.82,
                     )
+                    needed = staffing_req.scheduled_agents
 
                 # Planning error and schedule rounding.
                 schedule_bias = rng.normal(1.0, 0.06)
