@@ -1,0 +1,25 @@
+digraph G {
+  rankdir=LR;
+  node [shape=box, style="rounded,filled", fillcolor="#f3f4f6", fontname="Helvetica"];
+  edge [color="#6b7280", penwidth=1.2];
+
+  gen [label="Python Data Generator\n(generate_sample_data.py)"];
+  raw [label="Raw CSVs\n(demand_raw.csv\nstaffing_raw.csv)"];
+  etl [label="ETL + Data Validation\n(etl_build_marts.py)"];
+  curated [label="Curated Layer\n(parquet + postgres_load CSVs)"];
+
+  model [label="Forecast + Scenario Simulator\n(forecast_and_simulate.py)"];
+  results [label="Results Layer\n(forecasts + scenario KPIs)"];
+
+  pg [label="PostgreSQL\n(wfm schema + views)", fillcolor="#e5e7eb"];
+  pbi [label="Power BI\n(DAX + report)", fillcolor="#e5e7eb"];
+  tab [label="Tableau\n(Dashboards)", fillcolor="#e5e7eb"];
+
+  gen -> raw;
+  raw -> etl -> curated;
+  curated -> model -> results;
+  curated -> pg;
+  results -> pg;
+  pg -> pbi;
+  pg -> tab;
+}

@@ -1,0 +1,25 @@
+digraph ERD {
+  rankdir=LR;
+  node [shape=record, fontname="Helvetica", fontsize=10];
+  edge [color="#6b7280", penwidth=1.1];
+
+  dim_time [label="{dim_time|ts_start (PK)\ndate\nyear\nquarter\nmonth\nweek_of_year\nday_of_week\nhour\nminute}"];
+  dim_channel [label="{dim_channel|channel_id (PK)\nchannel_name (UQ)\nis_real_time}"];
+  dim_queue [label="{dim_queue|queue_id (PK)\nchannel_name\nqueue_name\n(UQ channel_name, queue_name)}"];
+  dim_scenario [label="{dim_scenario|scenario_id (PK)\nscenario_name (UQ)\ndemand_multiplier\nshrinkage_delta_pp\nwage_multiplier\nstaffing_buffer_pct}"];
+
+  fact_contacts [label="{fact_contacts|ts_start (PK)\ninterval_minutes (PK)\nchannel_name (PK)\nqueue_name (PK)\noffered_contacts\nhandled_contacts\nabandoned_contacts\naht_seconds\nasa_seconds\nservice_level\nsla_threshold_seconds}"];
+
+  fact_staffing [label="{fact_staffing|ts_start (PK)\ninterval_minutes (PK)\nchannel_name (PK)\nqueue_name (PK)\nagents_scheduled\nagents_available\nshrinkage_rate\ncost_per_hour}"];
+
+  fact_forecast [label="{fact_forecast|ts_start (PK)\ninterval_minutes (PK)\nchannel_name (PK)\nqueue_name (PK)\nmodel_name (PK)\ncreated_at (PK)\nforecast_offered\nforecast_aht_seconds}"];
+
+  fact_sim [label="{fact_simulation|scenario_id (PK)\nts_start (PK)\ninterval_minutes (PK)\nchannel_name (PK)\nqueue_name (PK)\nrequired_agents\nscheduled_agents\nservice_level\ncost_total}"];
+
+  dim_time -> fact_contacts [label="ts_start"];
+  dim_time -> fact_staffing [label="ts_start"];
+  dim_time -> fact_forecast [label="ts_start"];
+  dim_time -> fact_sim [label="ts_start"];
+
+  dim_scenario -> fact_sim [label="scenario_id"];
+}
