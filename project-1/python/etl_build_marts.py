@@ -235,7 +235,7 @@ def _write_postgres_load_csvs(demand: pd.DataFrame, staffing: pd.DataFrame, out_
     tmin = demand["timestamp_start"].min()
     tmax = demand["timestamp_start"].max()
     rng = pd.date_range(tmin, tmax, freq="15min")
-    dim_time = pd.DataFrame({"ts_start": rng.strftime("%Y-%m-%dT%H:%M:%SZ")})
+    dim_time = pd.DataFrame({"ts_start": rng.strftime("%Y-%m-%d %H:%M:%S")})
     dim_time["date_key"] = rng.date
     dim_time["year"] = rng.year
     dim_time["month"] = rng.month
@@ -248,7 +248,7 @@ def _write_postgres_load_csvs(demand: pd.DataFrame, staffing: pd.DataFrame, out_
     # --- Fact CSVs (column names and order match \copy in 02_load_from_csv.sql) ---
 
     demand_out = demand.copy()
-    demand_out["timestamp_start"] = demand_out["timestamp_start"].dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+    demand_out["timestamp_start"] = demand_out["timestamp_start"].dt.strftime("%Y-%m-%d %H:%M:%S")
     demand_out = demand_out.rename(columns={
         "timestamp_start": "ts_start",
         "channel": "channel_name",
@@ -262,7 +262,7 @@ def _write_postgres_load_csvs(demand: pd.DataFrame, staffing: pd.DataFrame, out_
     demand_out[fact_contacts_cols].to_csv(os.path.join(out_dir, "fact_contacts.csv"), index=False)
 
     staffing_out = staffing.copy()
-    staffing_out["timestamp_start"] = staffing_out["timestamp_start"].dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+    staffing_out["timestamp_start"] = staffing_out["timestamp_start"].dt.strftime("%Y-%m-%d %H:%M:%S")
     staffing_out = staffing_out.rename(columns={
         "timestamp_start": "ts_start",
         "channel": "channel_name",
