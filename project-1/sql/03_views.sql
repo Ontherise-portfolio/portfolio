@@ -13,12 +13,11 @@ SELECT
   c.asa_seconds,
   c.service_level,
   c.sla_threshold_seconds,
-  t.date,
+  t.date_key,
   t.year,
-  t.quarter,
   t.month,
-  t.week_of_year,
-  t.day_of_week,
+  t.day,
+  t.dow,
   t.hour,
   t.minute
 FROM wfm.fact_contacts c
@@ -34,12 +33,11 @@ SELECT
   s.agents_available,
   s.shrinkage_rate,
   s.cost_per_hour,
-  t.date,
+  t.date_key,
   t.year,
-  t.quarter,
   t.month,
-  t.week_of_year,
-  t.day_of_week,
+  t.day,
+  t.dow,
   t.hour,
   t.minute
 FROM wfm.fact_staffing s
@@ -66,7 +64,7 @@ CREATE OR REPLACE VIEW wfm.vw_scenario_kpis AS
 SELECT
   sc.scenario_name,
   sim.interval_minutes,
-  DATE(sim.ts_start) AS date,
+  DATE(sim.ts_start) AS date_key,
   sim.channel_name,
   SUM(sim.required_agents) AS required_agents_sum,
   SUM(sim.scheduled_agents) AS scheduled_agents_sum,
