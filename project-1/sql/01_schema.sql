@@ -19,7 +19,7 @@ CREATE TABLE IF NOT EXISTS wfm.dim_queue (
 
 CREATE TABLE IF NOT EXISTS wfm.dim_time (
   time_id BIGSERIAL PRIMARY KEY,
-  ts_start TIMESTAMPTZ NOT NULL UNIQUE,
+  ts_start TIMESTAMP NOT NULL UNIQUE,
   date_key DATE NOT NULL,
   year SMALLINT NOT NULL,
   month SMALLINT NOT NULL,
@@ -31,7 +31,7 @@ CREATE TABLE IF NOT EXISTS wfm.dim_time (
 
 -- Facts (base interval or aggregated)
 CREATE TABLE IF NOT EXISTS wfm.fact_contacts (
-  ts_start TIMESTAMPTZ NOT NULL,
+  ts_start TIMESTAMP NOT NULL,
   interval_minutes SMALLINT NOT NULL,
   channel_name TEXT NOT NULL,
   queue_name TEXT NOT NULL,
@@ -46,7 +46,7 @@ CREATE TABLE IF NOT EXISTS wfm.fact_contacts (
 );
 
 CREATE TABLE IF NOT EXISTS wfm.fact_staffing (
-  ts_start TIMESTAMPTZ NOT NULL,
+  ts_start TIMESTAMP NOT NULL,
   interval_minutes SMALLINT NOT NULL,
   channel_name TEXT NOT NULL,
   queue_name TEXT NOT NULL,
@@ -59,13 +59,13 @@ CREATE TABLE IF NOT EXISTS wfm.fact_staffing (
 
 -- Forecasts
 CREATE TABLE IF NOT EXISTS wfm.fact_forecast (
-  ts_start TIMESTAMPTZ NOT NULL,
+  ts_start TIMESTAMP NOT NULL,
   interval_minutes SMALLINT NOT NULL,
   channel_name TEXT NOT NULL,
   queue_name TEXT NOT NULL,
   model_name TEXT NOT NULL,
   forecast_offered DOUBLE PRECISION NOT NULL,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
   PRIMARY KEY (ts_start, interval_minutes, channel_name, queue_name, model_name, created_at)
 );
 
@@ -81,7 +81,7 @@ CREATE TABLE IF NOT EXISTS wfm.dim_scenario (
 
 CREATE TABLE IF NOT EXISTS wfm.fact_simulation (
   scenario_id SMALLINT NOT NULL REFERENCES wfm.dim_scenario(scenario_id),
-  ts_start TIMESTAMPTZ NOT NULL,
+  ts_start TIMESTAMP NOT NULL,
   interval_minutes SMALLINT NOT NULL,
   channel_name TEXT NOT NULL,
   queue_name TEXT NOT NULL,
