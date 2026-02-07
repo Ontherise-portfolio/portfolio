@@ -1,380 +1,466 @@
-# Tableau Dashboard Design: Workforce Forecast Simulator
+# Tableau Dashboard: Workforce Forecast Simulator
 
 ## Prerequisites
 
 - Tableau Desktop or Tableau Public installed
-- PostgreSQL `wfm` database loaded (steps 1-5 from the README)
-- Scenario results CSV available at `data/results/kpi_summary_60m.csv`
+- PostgreSQL `wfm` database loaded (schema + data + views from steps 1-5)
+- CSV files in `data/results/`: `kpi_summary_60m.csv`, `model_quality_60m.csv`
 
 ---
 
-## Step 1: Connect to PostgreSQL
+## Step 1: Connect to Data
+
+### Option A: PostgreSQL (Tableau Desktop)
 
 1. Open **Tableau Desktop**
-2. On the start screen, under **Connect > To a Server**, click **PostgreSQL**
-   - If using Tableau Public (free), skip to the CSV fallback section below
-3. Enter your connection details:
-   - Server: `localhost`
-   - Port: `5432`
-   - Database: `wfm`
-   - Username: `postgres`
-   - Password: your PostgreSQL password
+2. Under **Connect > To a Server**, click **PostgreSQL**
+3. Server: `localhost`, Port: `5432`, Database: `wfm`, Username: `postgres`, Password: your password
 4. Click **Sign In**
+5. In the left panel, set **Schema** to `wfm`
+6. Drag `vw_contacts` onto the canvas — this becomes your first data source
+7. Click **Update Now** to preview the data. You should see ~60,480 rows with columns like `ts_start`, `channel_name`, `offered_contacts`, `service_level`, etc.
+8. Switch to **Extract** (top-right radio button) for faster performance, then click **Update Now**
 
-### Add views as data sources
+### Repeat for staffing data
 
-1. In the left panel, under **Schema**, select `wfm`
-2. Under **Table**, search for and drag each of these onto the canvas:
-   - `vw_contacts`
-   - `vw_staffing`
-   - `vw_scenario_kpis`
-3. Each view should be added as its own data source (not joined together)
-4. For best performance, click **Extract** (instead of Live) in the top-right of the data source tab, then click **Update Now**
+1. Click **Data > New Data Source > PostgreSQL** (same connection)
+2. Drag `vw_staffing` onto the canvas
+3. Switch to **Extract**
 
-### CSV fallback (Tableau Public or no Postgres)
+### Option B: CSV (Tableau Public or no Postgres)
 
-If you don't have a PostgreSQL connection:
+Tableau Public can't connect to databases. Use the CSVs instead:
 
-1. Click **Connect > To a File > Text File**
-2. Navigate to `project-1/data/curated/postgres_load/` and load:
-   - `fact_contacts.csv`
-   - `fact_staffing.csv`
-3. Also load the scenario results:
-   - Navigate to `project-1/data/results/`
-   - Load `kpi_summary_60m.csv`
+1. **Connect > To a File > Text File**
+2. Load `data/curated/postgres_load/fact_contacts.csv` — rename the data source to `Contacts`
+3. **Data > New Data Source > Text File** > load `data/curated/postgres_load/fact_staffing.csv` — rename to `Staffing`
 
-### Add the scenario KPI CSV
+The CSV columns use the same names as the Postgres views (`ts_start`, `channel_name`, `queue_name`, etc.) but lack the time dimension fields (`date_key`, `dow`, `hour`). You'll create those as calculated fields in Step 2.
 
-Whether using Postgres or not, you'll need the scenario results CSV:
+### Add scenario and model quality CSVs
 
-1. Click **Data > New Data Source > Text File**
-2. Navigate to `project-1/data/results/kpi_summary_60m.csv`
-3. Click **Open**
-4. Tableau will auto-detect columns. Verify that `date` is recognized as a Date type
-5. Rename this data source to `Scenario KPIs` (right-click the tab at the top of the data source pane)
+For both PostgreSQL and CSV paths:
+
+1. **Data > New Data Source > Text File**
+2. Load `data/results/kpi_summary_60m.csv` — rename to `Scenario KPIs`
+3. **Data > New Data Source > Text File**
+4. Load `data/results/model_quality_60m.csv` — rename to `Model Quality`
+
+### Verify data types
+
+For each data source, check the data types in the data source tab (click the icon above each column):
+- `ts_start`: should be **Date & Time**
+- `date_key` / `date`: should be **Date**
+- All numeric columns (offered_contacts, service_level, etc.): should be **Number (whole)** or **Number (decimal)**
+- `channel_name`, `queue_name`, `scenario_name`: should be **String**
+
+If any type is wrong, click the icon above the column and change it.
 
 ---
 
-## Step 2: Create Calculated Fields
+## Step 2: Calculated Fields
 
-After connecting, go to a new worksheet. For each data source, create these calculated fields.
+Go to a new worksheet. For each data source, right-click in the **Data** pane > **Create Calculated Field**.
 
-### On `vw_contacts` (or `fact_contacts`)
+### On `vw_contacts` (or `Contacts` CSV)
 
-Right-click in the **Data** pane (left sidebar) > **Create Calculated Field** for each:
-
-**Abandon Rate:**
+**Abandon Rate** — Fraction of contacts that abandoned before being answered. In WFM, >5% is a warning, >10% is critical:
 ```
 SUM([Abandoned Contacts]) / SUM([Offered Contacts])
 ```
+*Why SUM/SUM?* This gives a weighted average across all rows in the filter context. Simply dividing the two columns row-by-row would give per-interval rates that don't aggregate correctly.
 
-**SLA Met (per row):**
+**SLA Met** — Binary flag: did this interval meet its channel-specific SLA target? Voice must hit 80%, chat 75%, email 90%. These thresholds come from the SLA agreements (voice: 80% in 20s, chat: 75% in 30s, email: 90% in 24h):
 ```
 IF [Service Level] >=
-  (IF [Channel Name] = 'voice' THEN 0.80
-   ELSEIF [Channel Name] = 'chat' THEN 0.75
-   ELSE 0.90 END)
+    (IF [Channel Name] = 'voice' THEN 0.80
+     ELSEIF [Channel Name] = 'chat' THEN 0.75
+     ELSE 0.90 END)
 THEN 1 ELSE 0
 END
 ```
 
-**SLA Attainment Rate:**
+**SLA Attainment Rate** — What proportion of intervals met their SLA target. Use as `AVG([SLA Met])` in visuals:
 ```
-AVG([SLA Met (per row)])
+AVG([SLA Met])
 ```
 
-### On `vw_staffing` (or `fact_staffing`)
+**Day of Week** (only needed for CSV path — the Postgres view already has `dow`):
+```
+DATEPART('weekday', [Ts Start]) - 2
+```
+*Note:* Tableau's `weekday` returns 1=Sunday. This formula converts to 0=Monday to match the Postgres `dow` column.
 
-**Labor Cost (per row):**
+**Hour** (only needed for CSV path):
+```
+DATEPART('hour', [Ts Start])
+```
+
+### On `vw_staffing` (or `Staffing` CSV)
+
+**Labor Cost** — Total labor cost per interval. The formula multiplies agents by their hourly rate, then pro-rates for the 15-minute interval (15/60 = 0.25 hours):
 ```
 [Agents Scheduled] * [Cost Per Hour] * ([Interval Minutes] / 60.0)
 ```
+*Why per-row?* This is a row-level calculation. When Tableau aggregates, use `SUM([Labor Cost])` to get totals.
 
-**Staffing Gap:**
+**Staffing Gap** — How many more agents are scheduled than available. Positive = overstaffed (excess capacity), negative = understaffed (shrinkage ate too many agents):
 ```
 [Agents Scheduled] - [Agents Available]
 ```
 
-**Overstaffed?:**
+**Overstaffed?** — Categorizes each interval as over or under staffed. Useful for coloring visuals:
 ```
 IF [Staffing Gap] > 0 THEN 'Over' ELSE 'Under' END
 ```
 
 ### On `Scenario KPIs`
 
-No calculated fields needed — columns are pre-aggregated from the Python pipeline.
+No calculated fields needed. The CSV contains pre-aggregated daily KPIs per scenario per channel from the Python simulation pipeline.
 
 ---
 
-## Step 3: Build Dashboard 1 — Executive Summary
+## Step 3: Dashboard 1 — Executive Summary
 
-### Create the KPI text sheet
+**Business purpose:** Single-page overview for leadership showing contact center health: volume, cost, service quality, and trends over the 90-day simulation period.
 
-1. Click **Worksheet > New Worksheet**, rename it to `KPI Cards`
-2. Set the data source to `vw_contacts`
-3. Drag `SUM(Offered Contacts)` to the **Text** shelf on the Marks card
-4. Drag `SUM(Handled Contacts)` to the **Text** shelf
-5. Drag `AVG(Service Level)` to the **Text** shelf
-6. Drag `Abandon Rate` (calculated field) to the **Text** shelf
-7. Click the **Text** mark, then click the **...** button to format the layout:
-   - Arrange the four values with labels, e.g.:
-     ```
-     Offered: <SUM(Offered Contacts)>    Handled: <SUM(Handled Contacts)>
-     Avg SLA: <AVG(Service Level)>       Abandon Rate: <AGG(Abandon Rate)>
-     ```
-8. Format `AVG(Service Level)` and `Abandon Rate` as percentages:
-   - Right-click the field on the Marks card > **Format** > Numbers > **Percentage**
+### Worksheet: KPI Cards
 
-### Create the volume trend line chart
-
-1. Create a new worksheet, rename to `Volume Trend`
+1. New worksheet, rename to `KPI Cards`
 2. Data source: `vw_contacts`
-3. Drag `Date Key` to **Columns** (it will become a date hierarchy — click the `+` to expand to the Day level, or right-click and select **Exact Date**)
+3. Drag `SUM(Offered Contacts)` to **Text** on the Marks card
+4. Drag `SUM(Handled Contacts)` to **Text**
+5. Drag `AVG(Service Level)` to **Text**
+6. Drag `AGG(Abandon Rate)` to **Text**
+7. Click the **Text** button on the Marks card > click the **...** to open the editor
+8. Format the layout:
+   ```
+   Offered: <SUM(Offered Contacts)>    Handled: <SUM(Handled Contacts)>
+   Avg SLA: <AVG(Service Level)>       Abandon Rate: <AGG(Abandon Rate)>
+   ```
+9. Format percentages: right-click `AVG(Service Level)` on the Marks card > **Format** > **Numbers** > **Percentage**, 1 decimal
+10. Repeat for Abandon Rate
+
+### Worksheet: Volume Trend
+
+Shows daily contact volume. Look for the weekly cycle (weekend dips) and the +0.08%/day upward trend baked into the synthetic data.
+
+1. New worksheet, rename to `Volume Trend`
+2. Data source: `vw_contacts`
+3. Drag `Date Key` to **Columns** — right-click the pill > select **Exact Date** (not the YEAR hierarchy)
 4. Drag `SUM(Offered Contacts)` to **Rows**
-5. Drag `SUM(Handled Contacts)` to **Rows** (next to the first pill — this creates a dual axis)
-6. Right-click the second Y-axis > **Synchronize Axis**
-7. On the **Marks** card for both measures, set mark type to **Line**
-8. Add color distinction: click the **Color** button on each Marks card and choose different colors
+5. Drag `SUM(Handled Contacts)` to **Rows** (this creates a second axis)
+6. Right-click the right Y-axis > **Synchronize Axis**
+7. On the **Marks** card, ensure both are set to **Line**
+8. Click **Color** on each Marks card: set Offered = blue, Handled = green
 
-### Create the channel breakdown bar chart
+### Worksheet: Channel Breakdown
 
-1. Create a new worksheet, rename to `Channel Breakdown`
+1. New worksheet, rename to `Channel Breakdown`
 2. Data source: `vw_contacts`
 3. Drag `Channel Name` to **Rows**
 4. Drag `SUM(Offered Contacts)` to **Columns**
-5. Drag `Channel Name` to **Color** on the Marks card
-6. Sort descending by clicking the sort icon in the toolbar
+5. Drag `Channel Name` to **Color** on Marks card
+6. Click the sort icon (toolbar) to sort descending
+
+Voice should show the highest volume (~41 contacts per 15-min base rate), followed by chat (~18), then email (~10).
 
 ### Assemble the dashboard
 
-1. Click **Dashboard > New Dashboard**
-2. Rename to `Executive Summary`
-3. Set the dashboard size: **Dashboard** pane (left) > **Size** > select **Automatic** or **Fixed (1200 x 800)**
-4. Drag the `KPI Cards` sheet onto the top of the dashboard canvas
-5. Drag the `Volume Trend` sheet below the KPI cards (left half)
-6. Drag the `Channel Breakdown` sheet to the right of the trend
+1. **Dashboard > New Dashboard**, rename to `Executive Summary`
+2. Set size: **Dashboard** pane > **Size** > **Automatic** or **Fixed (1200 x 800)**
+3. Drag `KPI Cards` to the top
+4. Drag `Volume Trend` to the left half below
+5. Drag `Channel Breakdown` to the right half below
 
 ### Add filters
 
-1. On the dashboard, click the `Volume Trend` sheet
-2. Click the filter icon (funnel) in the top-right corner of the sheet
-3. Select `Channel Name` — this adds an interactive filter
-4. Right-click the filter > **Apply to Worksheets > All Using This Data Source**
-5. Repeat for `Date Key` to add a date range filter
+1. On the dashboard, click the `Volume Trend` sheet > click the **funnel icon** (top-right of the sheet)
+2. Select `Channel Name` — an interactive filter appears
+3. Right-click the filter > **Apply to Worksheets > All Using This Data Source**
+4. Repeat: click `Volume Trend` > funnel > select `Date Key` for a date range filter
 
 ---
 
-## Step 4: Build Dashboard 2 — Staffing Gap Heatmap
+## Step 4: Dashboard 2 — Forecast Quality
 
-### Create the heatmap worksheet
+**Business purpose:** Evaluate forecast model accuracy per channel and queue. Poor forecasts directly cause staffing errors — over-forecasting wastes labor budget, under-forecasting misses SLA.
 
-1. Create a new worksheet, rename to `Staffing Heatmap`
-2. Data source: `vw_staffing`
-3. Drag `Dow` to **Rows**
-4. Drag `Hour` to **Columns**
-5. Drag `AVG(Staffing Gap)` (calculated field) to **Color** on the Marks card
-6. Set the mark type to **Square** (dropdown at the top of the Marks card)
-7. Click **Color** > **Edit Colors**:
-   - Select a **Red-Green Diverging** palette
-   - Check **Stepped Color** with 5 steps
-   - Set the center to `0`
-   - Click **OK**
-8. Drag `AVG(Staffing Gap)` to **Label** on the Marks card to show values in each cell
-9. Right-click the `Dow` axis > **Edit Alias** to rename 0=Mon, 1=Tue, 2=Wed, 3=Thu, 4=Fri, 5=Sat, 6=Sun
+### Worksheet: MAPE by Queue
 
-### Create the understaffed intervals table
+MAPE (Mean Absolute Percentage Error) measures the average % deviation between forecasted and actual demand. Under 20% is good for WFM; under 10% is excellent.
 
-1. Create a new worksheet, rename to `Understaffed Intervals`
-2. Data source: `vw_staffing`
-3. Change the view to a text table: click **Show Me** (top right) > select **Text table**
-4. Drag these to **Rows**: `Ts Start`, `Channel Name`, `Queue Name`
-5. Drag `SUM(Agents Scheduled)`, `SUM(Agents Available)`, `SUM(Staffing Gap)` to the **Text** shelf
-6. Right-click `SUM(Staffing Gap)` on the Rows shelf > **Sort** > **Ascending**
-7. Add a filter: drag `Staffing Gap` to the **Filters** shelf > select **Range** > set max to `0` to show only understaffed rows
+1. New worksheet, rename to `MAPE by Queue`
+2. Data source: `Model Quality`
+3. Drag `Queue` to **Rows**
+4. Drag `Mape` to **Columns** — right-click the pill > **Dimension** (don't aggregate, there's one row per queue)
+5. Drag `Channel` to **Color** on Marks card
+6. **Format > Data labels**: right-click axis > **Format** > **Numbers** > **Percentage** if values are in decimal form, otherwise **Number (Standard)**
+
+### Worksheet: RMSE by Queue
+
+RMSE (Root Mean Squared Error) penalizes large forecast errors more than MAPE (due to squaring). A model with low MAPE but high RMSE occasionally makes large mistakes.
+
+1. New worksheet, rename to `RMSE by Queue`
+2. Data source: `Model Quality`
+3. Drag `Queue` to **Rows**
+4. Drag `Rmse` to **Columns** — right-click > **Dimension**
+5. Drag `Channel` to **Color**
 
 ### Assemble the dashboard
 
-1. Click **Dashboard > New Dashboard**, rename to `Staffing Heatmap`
-2. Drag `Staffing Heatmap` sheet onto the top (takes up most of the space)
-3. Drag `Understaffed Intervals` sheet below it
-4. Add a channel filter (same method as Step 3)
+1. **Dashboard > New Dashboard**, rename to `Forecast Quality`
+2. Drag `MAPE by Queue` to the left half
+3. Drag `RMSE by Queue` to the right half
+4. Add a **Text** object at the top with interpretation guidance:
+   ```
+   MAPE: Average % error. <10% excellent, 10-20% good, >50% poor
+   RMSE: Penalizes big misses. Compare across queues to find problem areas.
+   Holdout: 14 days withheld from training for evaluation.
+   ```
 
 ---
 
-## Step 5: Build Dashboard 3 — Service Analysis
+## Step 5: Dashboard 3 — Staffing Gap Heatmap
 
-### Create the service level trend
+**Business purpose:** The most actionable dashboard for WFM planners. Shows exactly which day-of-week + hour-of-day combinations are overstaffed or understaffed, so planners can adjust shift schedules.
 
-1. Create a new worksheet, rename to `SLA Trend`
+### Worksheet: Heatmap
+
+1. New worksheet, rename to `Staffing Heatmap`
+2. Data source: `vw_staffing`
+3. Drag `Dow` to **Rows** — right-click > **Dimension** (prevents aggregation)
+4. Drag `Hour` to **Columns** — right-click > **Dimension**
+5. Drag `AVG(Staffing Gap)` to **Color** on Marks card
+6. Set mark type to **Square** (dropdown at top of Marks card)
+7. Click **Color > Edit Colors**:
+   - Palette: **Red-Green Diverging**
+   - Check **Stepped Color**, 5 steps
+   - Click **Advanced** > check **Center**: set to `0`
+   - This makes red=understaffed, white=balanced, green=overstaffed
+8. Drag `AVG(Staffing Gap)` to **Label** to show values in cells
+9. Right-click each `Dow` value on the axis > **Edit Alias**:
+   - 0 → Mon, 1 → Tue, 2 → Wed, 3 → Thu, 4 → Fri, 5 → Sat, 6 → Sun
+
+**Reading the heatmap:** Red squares indicate times where shrinkage is causing understaffing — schedule more agents for those slots. Green squares indicate excess capacity — reduce scheduling to save labor cost.
+
+### Worksheet: Understaffed Intervals
+
+A detail table showing the worst-staffed specific intervals.
+
+1. New worksheet, rename to `Understaffed Intervals`
+2. Data source: `vw_staffing`
+3. Click **Show Me** (top-right) > select **Text table**
+4. Drag to **Rows**: `Ts Start`, `Channel Name`, `Queue Name`
+5. Drag to **Text** on Marks: `SUM(Agents Scheduled)`, `SUM(Agents Available)`, `SUM(Staffing Gap)`
+6. Add a filter: drag `Staffing Gap` to **Filters** > **Range of values** > set max to `0`
+7. Right-click `SUM(Staffing Gap)` column header > **Sort > Ascending** (worst understaffing first)
+
+### Assemble the dashboard
+
+1. **Dashboard > New Dashboard**, rename to `Staffing Heatmap`
+2. Drag `Staffing Heatmap` to the top (2/3 of the space)
+3. Drag `Understaffed Intervals` to the bottom (1/3)
+4. Add a channel filter (funnel icon on the heatmap sheet > Channel Name)
+
+---
+
+## Step 6: Dashboard 4 — Service Analysis
+
+**Business purpose:** Deep dive into service level performance — when and where are customers waiting too long? Which queues are the bottleneck?
+
+### Worksheet: SLA Trend
+
+Service level over time. The SLA target line helps identify days where performance degraded.
+
+1. New worksheet, rename to `SLA Trend`
 2. Data source: `vw_contacts`
-3. Drag `Date Key` to **Columns** (set to exact date)
+3. Drag `Date Key` to **Columns** (right-click > **Exact Date**)
 4. Drag `AVG(Service Level)` to **Rows**
 5. Set mark type to **Line**
-6. Add a reference line for the SLA target:
+6. Add a reference line:
    - Right-click the Y-axis > **Add Reference Line**
-   - Set **Value** to **Constant** = `0.80`
-   - Set **Label** to **Custom** = `Target SLA (80%)`
-   - Set **Line** color to red, dashed
+   - **Value**: Constant = `0.80`
+   - **Label**: Custom = `Voice SLA Target (80%)`
+   - **Line**: color = red, style = dashed
    - Click **OK**
 
-### Create the ASA by queue chart
+### Worksheet: ASA by Queue
 
-1. Create a new worksheet, rename to `ASA by Queue`
+Average Speed of Answer per queue. Longer ASA = longer customer wait. Only applies to real-time channels (voice, chat) — email shows 0 because it's a throughput channel with no real-time queuing.
+
+1. New worksheet, rename to `ASA by Queue`
 2. Data source: `vw_contacts`
 3. Drag `Queue Name` to **Rows**
 4. Drag `AVG(Asa Seconds)` to **Columns**
-5. Drag `Channel Name` to **Color** on the Marks card
-6. Sort descending by AVG(Asa Seconds)
+5. Drag `Channel Name` to **Color**
+6. Sort descending (longest wait at top)
 
-### Create service level by hour
+### Worksheet: SLA by Hour
 
-1. Create a new worksheet, rename to `SLA by Hour`
+Shows service level broken down by hour of day. Expect dips during peak hours (9am-12pm, 2pm-5pm) when contact volume spikes but staffing can't keep up.
+
+1. New worksheet, rename to `SLA by Hour`
 2. Data source: `vw_contacts`
-3. Drag `Hour` to **Columns** (right-click > **Dimension** to keep it discrete)
+3. Drag `Hour` to **Columns** — right-click > **Dimension** (keeps it discrete 0-23)
 4. Drag `AVG(Service Level)` to **Rows**
-5. Drag `Channel Name` to **Color** on the Marks card
+5. Drag `Channel Name` to **Color**
 6. Set mark type to **Bar**
-7. Add the 0.80 reference line (same method as SLA Trend)
+7. Add a reference line at 0.80 (same method as SLA Trend)
 
 ### Assemble the dashboard
 
-1. Click **Dashboard > New Dashboard**, rename to `Service Analysis`
+1. **Dashboard > New Dashboard**, rename to `Service Analysis`
 2. Drag `SLA Trend` across the top
-3. Drag `ASA by Queue` to the bottom-left
-4. Drag `SLA by Hour` to the bottom-right
+3. Drag `ASA by Queue` to bottom-left
+4. Drag `SLA by Hour` to bottom-right
 5. Add channel and date filters
 
 ---
 
-## Step 6: Build Dashboard 4 — Scenario Comparison
+## Step 7: Dashboard 5 — Scenario Comparison
 
-### Create scenario cost bar chart
+**Business purpose:** Compare the 7 staffing scenarios to quantify the cost-service tradeoff. The Python pipeline simulated:
 
-1. Create a new worksheet, rename to `Scenario Cost`
-2. Data source: `Scenario KPIs` (the CSV)
+| Scenario | What changes | Business question |
+|---|---|---|
+| Baseline | Nothing | What does normal look like? |
+| High demand (+10%) | +10% contacts | Can we handle a demand surge? |
+| Low demand (-10%) | -10% contacts | How much do we save if volume dips? |
+| Shrinkage up (+5pp) | +5pp absenteeism | What if attendance worsens? |
+| Shrinkage down (-5pp) | -5pp absenteeism | What if we improve attendance? |
+| Wage up (+10%) | +10% labor cost | What's the budget impact of raises? |
+| Aggressive service (20% buffer) | 20% overstaffing | What does premium service cost? |
+
+### Worksheet: Scenario Cost
+
+1. New worksheet, rename to `Scenario Cost`
+2. Data source: `Scenario KPIs`
 3. Drag `Scenario Name` to **Rows**
 4. Drag `SUM(Planned Labor Cost)` to **Columns**
-5. Drag `Scenario Name` to **Color** on the Marks card
-6. Sort descending by cost
+5. Drag `Scenario Name` to **Color**
+6. Sort descending
+7. Right-click axis > **Format** > **Numbers** > **Currency**
 
-### Create scenario service level bar chart
+### Worksheet: Scenario SLA
 
-1. Create a new worksheet, rename to `Scenario SLA`
+1. New worksheet, rename to `Scenario SLA`
 2. Data source: `Scenario KPIs`
 3. Drag `Scenario Name` to **Rows**
 4. Drag `AVG(Avg Service Level)` to **Columns**
-5. Format as percentage: right-click the axis > **Format** > **Numbers** > **Percentage**
+5. Right-click axis > **Format** > **Numbers** > **Percentage**
 6. Sort descending
 
-### Create cost vs service scatter
+### Worksheet: Cost vs Service Scatter
 
-1. Create a new worksheet, rename to `Cost vs Service`
+The key strategic visual. Each scenario is a dot: X = total cost, Y = average service level. This directly visualizes the tradeoff — spending more (right) buys better service (up). "Aggressive" will be top-right, "Low demand" bottom-left.
+
+1. New worksheet, rename to `Cost vs Service`
 2. Data source: `Scenario KPIs`
 3. Drag `SUM(Planned Labor Cost)` to **Columns**
 4. Drag `AVG(Avg Service Level)` to **Rows**
-5. Drag `Scenario Name` to **Detail** on the Marks card
-6. Drag `Scenario Name` to **Color** on the Marks card
-7. Drag `SUM(Forecast Offered)` to **Size** on the Marks card (bubble size = volume)
+5. Drag `Scenario Name` to **Detail** on Marks (creates one dot per scenario)
+6. Drag `Scenario Name` to **Color**
+7. Drag `SUM(Forecast Offered)` to **Size** (bigger bubble = more volume)
 8. Set mark type to **Circle**
-9. Click **Label** > check **Show mark labels** > select `Scenario Name`
+9. Click **Label** > check **Show mark labels** > add `Scenario Name`
 
 ### Assemble the dashboard
 
-1. Click **Dashboard > New Dashboard**, rename to `Scenario Comparison`
-2. Drag `Scenario Cost` to the top-left
-3. Drag `Scenario SLA` to the top-right
+1. **Dashboard > New Dashboard**, rename to `Scenario Comparison`
+2. Drag `Scenario Cost` to top-left
+3. Drag `Scenario SLA` to top-right
 4. Drag `Cost vs Service` across the bottom
-5. Add a filter on `Scenario Name`:
-   - Click the `Scenario Cost` sheet on the dashboard
-   - Click the filter icon > select `Scenario Name`
-   - Right-click the filter > **Apply to Worksheets > All Using This Data Source**
+5. Add a filter: click `Scenario Cost` on the dashboard > funnel icon > `Scenario Name`
+6. Right-click the filter > **Apply to Worksheets > All Using This Data Source**
 
 ---
 
-## Step 7: Add Interactive Parameters (Optional)
+## Step 8: Interactive Parameters (Optional)
 
-Parameters let users adjust scenario inputs dynamically.
+Parameters let users adjust scenario inputs dynamically with sliders.
 
 ### Create parameters
 
-For each parameter: right-click in the **Data** pane > **Create Parameter**
+Right-click in the **Data** pane > **Create Parameter** for each:
 
-| Name               | Data type | Range       | Step | Default |
-|--------------------|-----------|-------------|------|---------|
-| Demand Multiplier  | Float     | 0.70 – 1.30| 0.05 | 1.00    |
-| Shrinkage Delta    | Float     | -0.10 – 0.10| 0.01| 0.00    |
-| Wage Multiplier    | Float     | 0.80 – 1.30| 0.05 | 1.00    |
-| Staffing Buffer %  | Float     | 0.00 – 0.25| 0.01 | 0.08    |
+| Name | Data type | Allowable values | Range | Step | Default |
+|---|---|---|---|---|---|
+| Demand Multiplier | Float | Range | 0.70 – 1.30 | 0.05 | 1.00 |
+| Shrinkage Delta | Float | Range | -0.10 – 0.10 | 0.01 | 0.00 |
+| Wage Multiplier | Float | Range | 0.80 – 1.30 | 0.05 | 1.00 |
+| Staffing Buffer % | Float | Range | 0.00 – 0.25 | 0.01 | 0.08 |
 
 ### Show parameter controls
 
-1. Right-click each parameter in the Data pane > **Show Parameter**
-2. The sliders will appear on the right side of any worksheet
+Right-click each parameter > **Show Parameter**. Sliders appear on the right side of the worksheet.
 
-### Create calculated fields using parameters
+### Create calculated fields that use the parameters
 
 On `vw_contacts`:
 
-**Adjusted Demand:**
+**Adjusted Demand** — Multiplies actual demand by the parameter. At 1.10, this simulates a 10% demand increase:
 ```
 SUM([Offered Contacts]) * [Demand Multiplier]
 ```
 
 On `vw_staffing`:
 
-**Adjusted Labor Cost:**
+**Adjusted Labor Cost** — Applies wage multiplier and staffing buffer to the base cost:
 ```
-SUM([Labor Cost (per row)]) * [Wage Multiplier] * (1 + [Staffing Buffer %])
+SUM([Labor Cost]) * [Wage Multiplier] * (1 + [Staffing Buffer %])
 ```
 
-Use these adjusted measures in place of the originals to make dashboards interactive.
+Replace the original measures with these adjusted versions in any visual to make it respond to parameter sliders.
 
 ---
 
-## Step 8: Format and Publish
+## Step 9: Formatting and Publishing
 
-### Apply consistent formatting
+### Format dashboards
 
-1. For each dashboard, click **Dashboard > Format**:
-   - Set **Dashboard Shading** to a light background color
-   - Set consistent fonts across all sheets (e.g., Tableau Regular, 10pt)
-2. Add titles: drag a **Text** object from the dashboard pane onto the top of each dashboard
-3. Add a **Navigation** object if you want page-to-page links:
-   - From the Dashboard pane, drag **Navigation** onto the dashboard
-   - Point it to another dashboard
+1. For each dashboard: **Dashboard > Format**
+   - Set **Dashboard Shading** to a light background
+   - Set consistent fonts (Tableau Regular, 10pt)
+2. Add titles: drag a **Text** object from the Dashboard pane onto the top of each dashboard
+3. Add navigation between dashboards: drag a **Navigation** object > point to another dashboard
 
-### Save the workbook
+### Save
 
-1. **File > Save As** — name the file `WFM_Forecast_Simulator.twbx`
-   - `.twbx` packages the data extracts with the workbook (portable)
-   - `.twb` saves just the workbook (requires live data source access)
+**File > Save As** > `WFM_Forecast_Simulator.twbx`
+- `.twbx` = packaged workbook (includes data extracts — portable, shareable)
+- `.twb` = workbook only (requires live data source access)
 
-### Publish to Tableau Server / Tableau Public
+### Publish
 
 **Tableau Public (free):**
 1. **Server > Tableau Public > Save to Tableau Public As**
-2. Sign in with your Tableau Public account
-3. Name the workbook and click **Save**
+2. Sign in, name the workbook, click **Save**
 
-**Tableau Server / Tableau Cloud:**
-1. **Server > Sign In** — enter your server URL and credentials
-2. **Server > Publish Workbook**
-3. Select the project/folder
-4. Choose **Embed Credentials** for the PostgreSQL connection (or prompt users)
-5. Click **Publish**
+**Tableau Server / Cloud:**
+1. **Server > Sign In** > enter server URL and credentials
+2. **Server > Publish Workbook** > select project > **Publish**
+3. Choose **Embed Credentials** for PostgreSQL
 
 ---
 
 ## Column Reference
 
-These are the columns available in each data source:
+| Source | Columns | Row Count |
+|---|---|---|
+| `vw_contacts` | ts_start, interval_minutes, channel_name, queue_name, offered_contacts, handled_contacts, abandoned_contacts, aht_seconds, asa_seconds, service_level, sla_threshold_seconds, date_key, year, month, day, dow, hour, minute | 60,480 |
+| `vw_staffing` | ts_start, interval_minutes, channel_name, queue_name, agents_scheduled, agents_available, shrinkage_rate, cost_per_hour, date_key, year, month, day, dow, hour, minute | 60,480 |
+| `Scenario KPIs` (CSV) | scenario_id, scenario_name, date, channel, forecast_offered, planned_labor_cost, avg_service_level, avg_asa_seconds, avg_under_over | 588 |
+| `Model Quality` (CSV) | channel, queue, mape, rmse, holdout_days | 7 |
 
-| Source                | Columns                                                                                              |
-|-----------------------|------------------------------------------------------------------------------------------------------|
-| `vw_contacts`         | ts_start, interval_minutes, channel_name, queue_name, offered_contacts, handled_contacts, abandoned_contacts, aht_seconds, asa_seconds, service_level, sla_threshold_seconds, date_key, year, month, day, dow, hour, minute |
-| `vw_staffing`         | ts_start, interval_minutes, channel_name, queue_name, agents_scheduled, agents_available, shrinkage_rate, cost_per_hour, date_key, year, month, day, dow, hour, minute |
-| `vw_scenario_kpis`    | scenario_name, interval_minutes, date_key, channel_name, required_agents_sum, scheduled_agents_sum, cost_total_sum, service_level_avg, sla_attainment_rate |
-| `kpi_summary_60m.csv` | scenario_id, scenario_name, date, channel, forecast_offered, planned_labor_cost, avg_service_level, avg_asa_seconds, avg_under_over |
-| `dim_channel`         | channel_id, channel_name, is_real_time                                                               |
-| `dim_queue`           | queue_id, channel_name, queue_name                                                                   |
-| `dim_time`            | time_id, ts_start, date_key, year, month, day, dow, hour, minute                                     |
+### Key domain values
+
+| Field | Values | Meaning |
+|---|---|---|
+| `channel_name` | voice, chat, email | Contact channel |
+| `dow` | 0-6 | 0=Monday through 6=Sunday |
+| `hour` | 0-23 | Hour of day |
+| `interval_minutes` | 15 | Base interval granularity |
+| `service_level` | 0.0-1.0 | Fraction of contacts answered within SLA threshold |
+| `shrinkage_rate` | ~0.15-0.45 | Fraction of scheduled agents unavailable |
+| SLA targets | voice=0.80, chat=0.75, email=0.90 | Channel-specific service level commitments |
