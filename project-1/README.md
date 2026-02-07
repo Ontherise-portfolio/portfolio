@@ -38,9 +38,10 @@ python python/forecast_and_simulate.py --in_dir data/curated --out_dir data/resu
 5) Load into Postgres (optional):
 
 ```bash
-psql "$DATABASE_URL" -f sql/01_schema.sql
-psql "$DATABASE_URL" -f sql/02_load_from_csv.sql
-psql "$DATABASE_URL" -f sql/03_views.sql
+"C:\Program Files\PostgreSQL\18\bin\psql" -U postgres -d wfm -f sql\01_schema.sql
+"C:\Program Files\PostgreSQL\18\bin\psql" -U postgres -d wfm -f sql\02_load_from_csv.sql
+"C:\Program Files\PostgreSQL\18\bin\psql" -U postgres -d wfm -f sql\03_views.sql
+
 ```
 
 ## Outputs
